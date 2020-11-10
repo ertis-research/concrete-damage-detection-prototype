@@ -1,17 +1,25 @@
 package com.example.pytorchobjectdetectionapp
 
 import android.Manifest
-import android.content.ContextWrapper
+import android.content.Context
 import android.content.pm.PackageManager
-import android.net.Uri
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
 import android.os.Bundle
+import android.util.AttributeSet
 import android.util.Log
+import android.view.Surface
+import android.view.SurfaceView
+import android.view.View
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.*
+import androidx.camera.core.Preview.SurfaceProvider
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import com.example.pytorchobjectdetectionapp.views.CustomView
 import kotlinx.android.synthetic.main.activity_main.*
 import java.io.File
 import java.io.FileInputStream
@@ -20,8 +28,10 @@ import java.io.IOException
 import java.nio.ByteBuffer
 import java.text.SimpleDateFormat
 import java.util.*
+import java.util.concurrent.Executor
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+
 
 typealias LumaListener = (luma: Double) -> Unit
 
@@ -35,6 +45,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var cameraExecutor: ExecutorService
     private lateinit var outputDirectory: File
 
+    private lateinit var customView: CustomView
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -44,7 +56,7 @@ class MainActivity : AppCompatActivity() {
             startCamera()
         } else {
             ActivityCompat.requestPermissions(
-                this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS
+                    this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS
             )
         }
 
@@ -52,12 +64,15 @@ class MainActivity : AppCompatActivity() {
         camera_capture_button.setOnClickListener { takePhoto() }
 
         tempOutputDirectory = getOutputDirectory()
-        outputDirectory = File( "/sdcard/Pictures/PyTorch" )
+        outputDirectory = File("/sdcard/Pictures/PyTorch")
         if (!outputDirectory.isDirectory) {
             outputDirectory.mkdirs()
         }
         Log.d(TAG, "OUTPUTDIRECTORY: ${outputDirectory.absolutePath}")
         cameraExecutor = Executors.newSingleThreadExecutor()
+
+        // Set up custom view
+        customView = findViewById(R.id.customView)
     }
 
     @Throws(IOException::class)
@@ -80,10 +95,10 @@ class MainActivity : AppCompatActivity() {
 
         // Create time-stamped output file to hold the image
         val photoFile = File(
-            tempOutputDirectory,
-            SimpleDateFormat(
-                FILENAME_FORMAT, Locale.US
-            ).format(System.currentTimeMillis()) + ".jpg"
+                tempOutputDirectory,
+                SimpleDateFormat(
+                        FILENAME_FORMAT, Locale.US
+                ).format(System.currentTimeMillis()) + ".jpg"
         )
 
         // Create output options object which contains file + metadata
@@ -92,22 +107,29 @@ class MainActivity : AppCompatActivity() {
         // Set up image capture listener, which is triggered after photo has
         // been taken
         imageCapture.takePicture(
-            outputOptions,
-            ContextCompat.getMainExecutor(this),
-            object : ImageCapture.OnImageSavedCallback {
-                override fun onError(exc: ImageCaptureException) {
-                    Log.e(TAG, "Photo capture failed: ${exc.message}", exc)
-                }
+                outputOptions,
+                ContextCompat.getMainExecutor(this),
+                object : ImageCapture.OnImageSavedCallback {
+                    override fun onError(exc: ImageCaptureException) {
+                        Log.e(TAG, "Photo capture failed: ${exc.message}", exc)
+                    }
 
-                override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                    override fun onImageSaved(output: ImageCapture.OutputFileResults) {
 //                    val savedUri = Uri.fromFile(photoFile)
 //                    val msg = "Photo capture succeeded: $savedUri"
-                    copy(photoFile, File("${outputDirectory.absolutePath}/${photoFile.name}"))
-                    photoFile.delete()
+                        copy(photoFile, File("${outputDirectory.absolutePath}/${photoFile.name}"))
+                        photoFile.delete()
 //                    Toast.makeText(baseContext, msg, Toast.LENGTH_SHORT).show()
 //                    Log.d(TAG, msg)
-                }
-            })
+                    }
+                })
+
+        // Remove Rectangle :)
+        if (customView.isThereRectangles) {
+            customView.removeRectangle()
+        } else {
+            customView.startRectangle()
+        }
     }
 
     private fun startCamera() {
@@ -119,21 +141,23 @@ class MainActivity : AppCompatActivity() {
 
             // Preview
             val preview = Preview.Builder()
-                .build()
-                .also {
-                    it.setSurfaceProvider(viewFinder.createSurfaceProvider())
-                }
+                    .build()
+                    .also {
+                        it.setSurfaceProvider(viewFinder.createSurfaceProvider())
+                    }
 
             imageCapture = ImageCapture.Builder()
-                .build()
+                    .build()
 
             val imageAnalyzer = ImageAnalysis.Builder()
-                .build()
-                .also {
-                    it.setAnalyzer(cameraExecutor, LuminosityAnalyzer { luma ->
-                        Log.d(TAG, "Average luminosity: $luma")
-                    })
-                }
+                    .build()
+                    .also {
+                        it.setAnalyzer(cameraExecutor, LuminosityAnalyzer { luma ->
+//                            Log.d(TAG, "Average luminosity: $luma")
+                            customView.moveRectangle()
+                        })
+                    }
+
             // Select back camera as a default
             val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
@@ -143,7 +167,7 @@ class MainActivity : AppCompatActivity() {
 
                 // Bind use cases to camera
                 cameraProvider.bindToLifecycle(
-                    this, cameraSelector, preview, imageCapture, imageAnalyzer,
+                        this, cameraSelector, preview, imageCapture, imageAnalyzer,
                 )
 
             } catch (exc: Exception) {
@@ -155,7 +179,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun allPermissionsGranted() = REQUIRED_PERMISSIONS.all {
         ContextCompat.checkSelfPermission(
-            baseContext, it
+                baseContext, it
         ) == PackageManager.PERMISSION_GRANTED
     }
 
@@ -172,17 +196,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onRequestPermissionsResult(
-        requestCode: Int, permissions: Array<String>, grantResults:
-        IntArray
+            requestCode: Int, permissions: Array<String>, grantResults:
+            IntArray
     ) {
         if (requestCode == REQUEST_CODE_PERMISSIONS) {
             if (allPermissionsGranted()) {
                 startCamera()
             } else {
                 Toast.makeText(
-                    this,
-                    "Permissions not granted by the user.",
-                    Toast.LENGTH_SHORT
+                        this,
+                        "Permissions not granted by the user.",
+                        Toast.LENGTH_SHORT
                 ).show()
                 finish()
             }
